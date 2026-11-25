@@ -67,6 +67,17 @@ class ParentConsent(Base):
     consent_version: Mapped[str] = mapped_column(String(30), default="v1")
 
 
+class ParentLinkRequest(Base):
+    __tablename__ = "parent_link_requests"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    parent_id: Mapped[int] = mapped_column(ForeignKey("parents.id", ondelete="CASCADE"), index=True)
+    student_number: Mapped[str] = mapped_column(String(50), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True, nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+
+
 class SchoolClass(Base):
     __tablename__ = "classes"
     __table_args__ = (UniqueConstraint("name", "section", name="uq_class_name_section"),)

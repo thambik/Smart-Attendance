@@ -51,6 +51,7 @@ function App() {
   const [classes, setClasses] = useState([]);
   const [teachers, setTeachers] = useState([]);
   const [parents, setParents] = useState([]);
+  const [linkRequests, setLinkRequests] = useState([]);
   const [children, setChildren] = useState([]);
   const [history, setHistory] = useState([]);
   const [activeSession, setActiveSession] = useState(null);
@@ -61,7 +62,10 @@ function App() {
   const [form, setForm] = useState(initialForm);
   const [faceStudent, setFaceStudent] = useState("");
   const [faceImage, setFaceImage] = useState(null);
+  const [studentNumber, setStudentNumber] = useState("");
+  const [showAddChild, setShowAddChild] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [activeNav, setActiveNav] = useState("overview");
   const videoRef = useRef(null);
   const streamRef = useRef(null);
 
@@ -76,12 +80,15 @@ function App() {
     if (["admin", "teacher"].includes(user?.role)) {
       setStudents(await api("/students"));
       if (user.role === "admin") {
-        const [staff, guardians] = await Promise.all([api("/teachers"), api("/parents")]);
-        setTeachers(staff); setParents(guardians);
+        const [staff, guardians, requests] = await Promise.all([api("/teachers"), api("/parents"), api("/admin/parent-link-requests")]);
+        setTeachers(staff); setParents(guardians); setLinkRequests(requests);
       }
     } else {
       setHistory(await api("/attendance/history"));
-      if (user?.role === "parent") setChildren(await api("/parents/children"));
+      if (user?.role === "parent") {
+        const [linkedChildren, requests] = await Promise.all([api("/parents/children"), api("/parents/children/requests")]);
+        setChildren(linkedChildren); setLinkRequests(requests);
+      }
     }
   }
   useEffect(() => { if (user) loadDashboard().catch(e => setError(e.message)); }, [user]);
@@ -166,16 +173,32 @@ function App() {
     try { await api(`/parents/children/${studentId}/consent`, { method: "POST", body: JSON.stringify({ consent }) }); setNotice(consent ? "Consent recorded." : "Consent revoked and face profile removed."); }
     catch (e) { setError(e.message); }
   }
+  async function requestChildLink(event) {
+    event.preventDefault(); setError(""); setNotice("");
+    try {
+      await api("/parents/children/requests", { method: "POST", body: JSON.stringify({ student_number: studentNumber }) });
+      setStudentNumber(""); setShowAddChild(false); setNotice("Child-link request sent to the school for review.");
+      const requests = await api("/parents/children/requests");
+      setLinkRequests(requests);
+    } catch (e) { setError(e.message); }
+  }
+  async function reviewLinkRequest(requestId, approved) {
+    try {
+      await api(`/admin/parent-link-requests/${requestId}/review`, { method: "POST", body: JSON.stringify({ approved }) });
+      await loadDashboard(); setNotice(approved ? "Parent-child link approved." : "Link request rejected.");
+    } catch (e) { setError(e.message); }
+  }
   if (!user) return <Login onLogin={login} onRegister={registerParent} />;
 
   const roleTitle = { admin: "Administrator", teacher: "Teacher", student: "Student", parent: "Parent" }[user.role];
+  const attendanceAnchor = user.role === "admin" ? "attendance-snapshot" : user.role === "teacher" ? "attendance-session" : "attendance-history";
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark"><GraduationCap size={21} /></div><div><b>SmartAttend</b><small>AI SCHOOL SUITE</small></div></div>
       <div className="school-label">WORKSPACE</div>
-      <nav><div className="nav-item active"><LayoutDashboard size={18} /> Overview</div>
-        {user.role === "admin" && <div className="nav-item"><Users size={18} /> People</div>}
-        <div className="nav-item"><BookOpen size={18} /> Attendance</div>
+      <nav><a href="#dashboard-overview" className={`nav-item ${activeNav === "overview" ? "active" : ""}`} onClick={() => setActiveNav("overview")}><LayoutDashboard size={18} /> Overview</a>
+        {user.role === "admin" && <a href="#people-directory" className={`nav-item ${activeNav === "people" ? "active" : ""}`} onClick={() => setActiveNav("people")}><Users size={18} /> People</a>}
+        <a href={`#${attendanceAnchor}`} className={`nav-item ${activeNav === "attendance" ? "active" : ""}`} onClick={() => setActiveNav("attendance")}><BookOpen size={18} /> Attendance</a>
       </nav>
       <div className="sidebar-bottom"><div className="user-mini"><div className="avatar">{user.full_name?.[0]}</div><div><b>{user.full_name}</b><small>{roleTitle}</small></div><button className="icon-btn" onClick={logout} title="Sign out"><LogOut size={17} /></button></div></div>
     </aside>
@@ -185,9 +208,9 @@ function App() {
       </header>
       {error && <div className="alert error-alert"><X size={17} />{error}<button onClick={() => setError("")}><X size={15} /></button></div>}
       {notice && <div className="alert success-alert"><Check size={17} />{notice}<button onClick={() => setNotice("")}><X size={15} /></button></div>}
-      {user.role === "admin" && <AdminView summary={summary} students={students} teachers={teachers} parents={parents} classes={classes} form={form} setForm={setForm} submitEntity={submitEntity} busy={busy} onReport={() => downloadReport().catch(e => setError(e.message))} deleteStudent={deleteStudent} faceStudent={faceStudent} setFaceStudent={setFaceStudent} setFaceImage={setFaceImage} enrollFace={enrollFace} />}
+      {user.role === "admin" && <AdminView summary={summary} students={students} teachers={teachers} parents={parents} classes={classes} form={form} setForm={setForm} submitEntity={submitEntity} busy={busy} onReport={() => downloadReport().catch(e => setError(e.message))} deleteStudent={deleteStudent} faceStudent={faceStudent} setFaceStudent={setFaceStudent} setFaceImage={setFaceImage} enrollFace={enrollFace} linkRequests={linkRequests} reviewLinkRequest={reviewLinkRequest} />}
       {user.role === "teacher" && <TeacherView classes={classes} students={students} activeSession={activeSession} startSession={startSession} videoRef={videoRef} openCamera={openCamera} captureFace={captureFace} busy={busy} pendingMatch={pendingMatch} confirmPresent={confirmPresent} stopSession={stopSession} refreshRecords={() => api(`/attendance/sessions/${activeSession.id}`)} onExport={classId => downloadReport(`?class_id=${classId}`).catch(e => setError(e.message))} />}
-      {(user.role === "student" || user.role === "parent") && <FamilyView user={user} summary={summary} history={history} children={children} consent={consent} />}
+      {(user.role === "student" || user.role === "parent") && <FamilyView user={user} summary={summary} history={history} children={children} consent={consent} linkRequests={linkRequests} showAddChild={showAddChild} setShowAddChild={setShowAddChild} studentNumber={studentNumber} setStudentNumber={setStudentNumber} requestChildLink={requestChildLink} />}
     </main>
   </div>;
 }
@@ -196,21 +219,24 @@ function Metric({ label, value, note, icon: Icon, tone = "" }) {
   return <article className="metric-card"><div className={`metric-icon ${tone}`}><Icon size={20} /></div><span className="metric-label">{label}</span><strong>{value ?? "—"}</strong><small>{note}</small></article>;
 }
 
-function AdminView({ summary, students, teachers, parents, classes, form, setForm, submitEntity, busy, onReport, deleteStudent, faceStudent, setFaceStudent, setFaceImage, enrollFace }) {
+function AdminView({ summary, students, teachers, parents, classes, form, setForm, submitEntity, busy, onReport, deleteStudent, faceStudent, setFaceStudent, setFaceImage, enrollFace, linkRequests, reviewLinkRequest }) {
   const update = event => setForm(prev => ({ ...prev, [event.target.name]: event.target.value }));
-  return <div className="content">
+  return <div className="content" id="dashboard-overview">
     <section className="metrics">
       <Metric label="Total students" value={summary?.students} note="Active student profiles" icon={GraduationCap} tone="blue" />
       <Metric label="Teaching staff" value={summary?.teachers} note="Registered teachers" icon={Users} tone="purple" />
       <Metric label="Present today" value={summary?.present_today} note="Across today's sessions" icon={Check} tone="green" />
       <Metric label="Attendance rate" value={`${summary?.attendance_percentage ?? 0}%`} note={`${summary?.absent_today ?? 0} absent today`} icon={Activity} tone="orange" />
     </section>
-    <section className="section-card"><div className="section-heading"><div><h2>Attendance snapshot</h2><p>Today's recorded attendance</p></div><button className="secondary" onClick={onReport}><Download size={16} /> Export CSV</button></div>
+    <section className="section-card" id="attendance-snapshot"><div className="section-heading"><div><h2>Attendance snapshot</h2><p>Today's recorded attendance</p></div><button className="secondary" onClick={onReport}><Download size={16} /> Export CSV</button></div>
       <div className="chart-area" style={{ height: 100 }}><div style={{ height: 12, borderRadius: 8, background: "#eef2f8", overflow: "hidden" }}><span style={{ display: "block", height: "100%", width: `${summary?.attendance_percentage ?? 0}%`, background: "#4775dd" }} /></div>
         <div className="chart-caption"><span>{summary?.present_today ?? 0} present · {summary?.absent_today ?? 0} absent</span><b>{summary?.attendance_percentage ?? 0}%</b></div></div>
     </section>
-    <section className="section-card"><div className="section-heading"><div><h2>Student directory</h2><p>{students.length} enrolled students</p></div></div>
+    <section className="section-card" id="people-directory"><div className="section-heading"><div><h2>Student directory</h2><p>{students.length} enrolled students</p></div></div>
       {students.length ? <div className="table-wrap"><table><thead><tr><th>Student</th><th>Student ID</th><th>Class</th><th>Email</th><th></th></tr></thead><tbody>{students.map(s => <tr key={s.id}><td><div className="person"><span className="avatar soft">{s.full_name?.[0]}</span><b>{s.full_name}</b></div></td><td>{s.student_number}</td><td>{s.class_name || "—"}</td><td>{s.email}</td><td><button className="text-button" onClick={() => deleteStudent(s.id)}>Delete</button></td></tr>)}</tbody></table></div> : <div className="empty"><GraduationCap /><b>No students yet</b><span>Create your first student below.</span></div>}
+    </section>
+    <section className="section-card"><div className="section-heading"><div><h2>Parent link requests</h2><p>Review and verify before granting access to student records.</p></div><span className="request-count">{linkRequests.length} pending</span></div>
+      {linkRequests.length ? linkRequests.map(request => <div className="child-row" key={request.id}><div className="person"><span className="avatar soft">{request.parent_name?.[0]}</span><div><b>{request.parent_name} · {request.parent_email}</b><small>Student number {request.student_number}{request.student_name ? ` · ${request.student_name}` : " · no matching student yet"}</small></div></div><button className="secondary" disabled={!request.student_id} onClick={() => reviewLinkRequest(request.id, true)}>Approve</button><button className="text-button" onClick={() => reviewLinkRequest(request.id, false)}>Reject</button></div>) : <div className="empty small-empty">No parent link requests to review.</div>}
     </section>
     <section className="grid-two">
       <section className="section-card"><div className="section-heading"><div><h2>Add student</h2><p>Creates an account and class enrollment.</p></div></div>
@@ -261,8 +287,8 @@ function TeacherView({ classes, students, activeSession, startSession, videoRef,
   const [records, setRecords] = useState([]);
   useEffect(() => { if (activeSession) api(`/attendance/sessions/${activeSession.id}`).then(setRecords).catch(() => setRecords([])); }, [activeSession]);
   const enrolled = students.filter(student => String(student.class_id) === String(activeSession?.class_id));
-  return <div className="content">
-    <section className="section-card"><div className="section-heading"><div><h2>Attendance session</h2><p>Start a class session, scan consented faces, or record manually.</p></div>
+  return <div className="content" id="dashboard-overview">
+    <section className="section-card" id="attendance-session"><div className="section-heading"><div><h2>Attendance session</h2><p>Start a class session, scan consented faces, or record manually.</p></div>
       {activeSession ? <button className="danger" onClick={stopSession}><X size={16} /> Stop session</button> : <div className="inline-form"><select value={classId} onChange={e => setClassId(e.target.value)}><option value="">Select assigned class</option>{classes.map(c => <option key={c.id} value={c.id}>{c.name} {c.section}</option>)}</select><button className="primary" disabled={!classId} onClick={() => startSession(classId)}><Plus size={16} /> Start</button></div>}
     </div>
       {!activeSession ? <div className="empty"><Camera /><b>No active session</b><span>Select one of your assigned classes to begin.</span></div> :
@@ -283,7 +309,7 @@ function TeacherView({ classes, students, activeSession, startSession, videoRef,
   </div>;
 }
 
-function FamilyView({ user, summary, history, children, consent }) {
+function FamilyView({ user, summary, history, children, consent, linkRequests, showAddChild, setShowAddChild, studentNumber, setStudentNumber, requestChildLink }) {
   const subject = user.role === "student" ? summary?.children?.[0] : null;
   const data = user.role === "student" ? history : history;
   const [selectedChild, setSelectedChild] = useState("");
@@ -300,9 +326,11 @@ function FamilyView({ user, summary, history, children, consent }) {
       dates.set(key, current === "present" || current === "late" || ["present", "late"].includes(record.status) ? "present" : record.status);
     }
   });
-  return <div className="content">
-    {user.role === "parent" && <section className="section-card"><div className="section-heading"><div><h2>Linked children</h2><p>Manage child selection and biometric consent.</p></div>{children.length > 0 && <select value={selectedChild} onChange={e => setSelectedChild(e.target.value)}><option value="">All children</option>{children.map(c => <option key={c.id} value={c.id}>{c.full_name}</option>)}</select>}</div>
-      {!children.length && <div className="empty"><Users /><b>No linked children</b><span>Ask your school administrator to link your parent account.</span></div>}
+  return <div className="content" id="dashboard-overview">
+    {user.role === "parent" && <section className="section-card" id="linked-children"><div className="section-heading"><div><h2>Linked children</h2><p>Manage child selection and biometric consent.</p></div><div className="inline-form">{children.length > 0 && <select value={selectedChild} onChange={e => setSelectedChild(e.target.value)}><option value="">All children</option>{children.map(c => <option key={c.id} value={c.id}>{c.full_name}</option>)}</select>}<button className="primary" onClick={() => setShowAddChild(value => !value)}><Plus size={15} /> Add child</button></div></div>
+      {showAddChild && <form className="inline-form add-child-form" onSubmit={requestChildLink}><label>Student number<input value={studentNumber} onChange={e => setStudentNumber(e.target.value)} required maxLength={50} /></label><button className="primary" disabled={!studentNumber.trim()}>Send link request</button></form>}
+      {!children.length && !linkRequests.length && <div className="empty"><Users /><b>No linked children</b><span>Enter your child's student number to request a secure link.</span></div>}
+      {linkRequests.map(request => <div className="child-row" key={request.id}><div><b>Student number {request.student_number}</b><small>Requested {new Date(request.requested_at).toLocaleDateString()}</small></div><span className={`pill ${request.status === "approved" ? "present" : request.status === "rejected" ? "absent" : "excused"}`}>{request.status}</span></div>)}
       {children.filter(c => !selectedChild || String(c.id) === selectedChild).map(child => <div className="child-row" key={child.id}><div className="person"><span className="avatar soft">{child.full_name[0]}</span><div><b>{child.full_name}</b><small>{child.student_number}</small></div></div><button className="secondary" onClick={() => consent(child.id, true)}>Grant face consent</button><button className="text-button" onClick={() => consent(child.id, false)}>Revoke</button></div>)}
     </section>}
     <section className="metrics"><Metric label="Attendance rate" value={`${percent}%`} note="Based on recorded sessions" icon={Activity} tone="blue" /><Metric label={user.role === "parent" ? "Linked children" : "Recent records"} value={user.role === "parent" ? children.length : history.length} note="Attendance records available" icon={GraduationCap} tone="green" /></section>
@@ -318,7 +346,7 @@ function FamilyView({ user, summary, history, children, consent }) {
       </div>
       <div className="calendar-legend"><span><i className="present-dot" /> Present</span><span><i className="absent-dot" /> Absent</span></div>
     </section>
-    <section className="section-card"><div className="section-heading"><div><h2>Attendance history</h2><p>Recent attendance sessions and status.</p></div></div>
+    <section className="section-card" id="attendance-history"><div className="section-heading"><div><h2>Attendance history</h2><p>Recent attendance sessions and status.</p></div></div>
       {childHistory.length ? <div className="table-wrap"><table><thead><tr><th>Student</th><th>Date</th><th>Status</th><th>Recorded</th></tr></thead><tbody>{childHistory.map(row => <tr key={row.id}><td>{row.student_name}</td><td>{new Date(row.date).toLocaleDateString()}</td><td><span className={`pill ${row.status}`}>{row.status}</span></td><td>{new Date(row.recorded_at).toLocaleTimeString()}</td></tr>)}</tbody></table></div> : <div className="empty"><BookOpen /><b>No attendance records</b><span>Records appear when class sessions are completed.</span></div>}
     </section>
   </div>;

@@ -73,6 +73,14 @@ class ParentCreate(BaseModel):
     phone: str | None = None
 
 
+class ParentLinkRequestCreate(BaseModel):
+    student_number: str = Field(min_length=1, max_length=50)
+
+
+class ParentLinkRequestReview(BaseModel):
+    approved: bool
+
+
 class ConsentIn(BaseModel):
     consent: bool
 

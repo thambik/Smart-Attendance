@@ -11,9 +11,11 @@ depends_on = None
 
 
 def upgrade():
-    Base.metadata.create_all(bind=op.get_bind())
+    tables = [table for table in Base.metadata.sorted_tables if table.name != "parent_link_requests"]
+    Base.metadata.create_all(bind=op.get_bind(), tables=tables)
 
 
 def downgrade():
-    Base.metadata.drop_all(bind=op.get_bind())
+    tables = [table for table in reversed(Base.metadata.sorted_tables) if table.name != "parent_link_requests"]
+    Base.metadata.drop_all(bind=op.get_bind(), tables=tables)
 

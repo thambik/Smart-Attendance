@@ -5,14 +5,14 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, aliased, joinedload
 
 from app.ai.face_engine import FaceInputError, FaceModelUnavailable, decrypt_embedding, encrypt_embedding, extract_embedding, match_embedding
 from app.config import settings
 from app.database import get_db
 from app.models import Attendance, AttendanceSession, AttendanceStatus, AuditLog
-from app.models import Enrollment, FaceProfile, Parent, ParentConsent, SchoolClass, SchoolSetting, Student, Teacher, User
-from app.schemas import ClassCreate, ClassOut, ClassUpdate, ConsentIn, LoginIn, ManualAttendanceIn, ParentCreate, RecognitionOut, SessionCreate, StudentCreate, StudentUpdate, TeacherCreate, TeacherUpdate, UserOut
+from app.models import Enrollment, FaceProfile, Parent, ParentConsent, ParentLinkRequest, SchoolClass, SchoolSetting, Student, Teacher, User, utcnow
+from app.schemas import ClassCreate, ClassOut, ClassUpdate, ConsentIn, LoginIn, ManualAttendanceIn, ParentCreate, ParentLinkRequestCreate, ParentLinkRequestReview, RecognitionOut, SessionCreate, StudentCreate, StudentUpdate, TeacherCreate, TeacherUpdate, UserOut
 from app.security import create_access_token, hash_password, require_roles, verify_password, current_user
 from app.services import audit, close_session, get_session_for_teacher, mark_attendance, report_rows, teacher_for_user
 
@@ -389,6 +389,101 @@ def parent_children(db: Session = Depends(get_db), user: User = Depends(require_
         raise HTTPException(status_code=404, detail="Parent profile not found")
     students = db.scalars(select(Student).options(joinedload(Student.user)).where(Student.parent_id == parent.id)).unique().all()
     return [{"id": s.id, "student_number": s.student_number, "full_name": s.user.full_name} for s in students]
+
+
+@router.post("/parents/children/requests", status_code=201)
+def request_child_link(payload: ParentLinkRequestCreate, db: Session = Depends(get_db), user: User = Depends(require_roles("parent"))):
+    parent = db.scalar(select(Parent).where(Parent.user_id == user.id))
+    if parent is None:
+        raise HTTPException(status_code=404, detail="Parent profile not found")
+    student_number = payload.student_number.strip()
+    existing = db.scalar(select(ParentLinkRequest).where(
+        ParentLinkRequest.parent_id == parent.id,
+        ParentLinkRequest.student_number == student_number,
+        ParentLinkRequest.status == "pending",
+    ))
+    if existing:
+        raise HTTPException(status_code=409, detail="A request for this student is already pending")
+    request = ParentLinkRequest(parent_id=parent.id, student_number=student_number)
+    db.add(request)
+    db.flush()
+    audit(db, user, "parent.child_link_request", "parent_link_request", request.id)
+    db.commit()
+    return {"id": request.id, "student_number": request.student_number, "status": request.status, "requested_at": request.requested_at}
+
+
+@router.get("/parents/children/requests")
+def parent_link_requests(db: Session = Depends(get_db), user: User = Depends(require_roles("parent"))):
+    parent = db.scalar(select(Parent).where(Parent.user_id == user.id))
+    if parent is None:
+        raise HTTPException(status_code=404, detail="Parent profile not found")
+    requests = db.scalars(select(ParentLinkRequest).where(
+        ParentLinkRequest.parent_id == parent.id
+    ).order_by(ParentLinkRequest.requested_at.desc())).all()
+    return [{"id": item.id, "student_number": item.student_number, "status": item.status,
+             "requested_at": item.requested_at, "reviewed_at": item.reviewed_at} for item in requests]
+
+
+@router.get("/admin/parent-link-requests")
+def list_parent_link_requests(db: Session = Depends(get_db), _: User = Depends(require_roles("admin"))):
+    parent_user = aliased(User)
+    student_user = aliased(User)
+    rows = db.execute(
+        select(ParentLinkRequest, Parent, parent_user, Student, student_user)
+        .join(Parent, Parent.id == ParentLinkRequest.parent_id)
+        .join(parent_user, parent_user.id == Parent.user_id)
+        .outerjoin(Student, Student.student_number == ParentLinkRequest.student_number)
+        .outerjoin(student_user, student_user.id == Student.user_id)
+        .where(ParentLinkRequest.status == "pending")
+        .order_by(ParentLinkRequest.requested_at)
+    ).all()
+    return [{
+        "id": request.id,
+        "parent_id": parent.id,
+        "parent_name": parent_user.full_name,
+        "parent_email": parent_user.email,
+        "student_number": request.student_number,
+        "student_id": student.id if student else None,
+        "student_name": student_user.full_name if student and student_user else None,
+        "requested_at": request.requested_at,
+    } for request, parent, parent_user, student, student_user in rows]
+
+
+@router.post("/admin/parent-link-requests/{request_id}/review")
+def review_parent_link_request(
+    request_id: int,
+    payload: ParentLinkRequestReview,
+    db: Session = Depends(get_db),
+    actor: User = Depends(require_roles("admin")),
+):
+    request = db.get(ParentLinkRequest, request_id)
+    if request is None:
+        raise HTTPException(status_code=404, detail="Link request not found")
+    if request.status != "pending":
+        raise HTTPException(status_code=409, detail="Link request has already been reviewed")
+    student = db.scalar(select(Student).where(Student.student_number == request.student_number))
+    if payload.approved:
+        if student is None:
+            raise HTTPException(status_code=404, detail="No student matches this student number")
+        if student.parent_id is not None and student.parent_id != request.parent_id:
+            raise HTTPException(status_code=409, detail="Student is already linked to another parent")
+        if student.parent_id != request.parent_id:
+            consent = db.scalar(select(ParentConsent).where(ParentConsent.student_id == student.id))
+            if consent:
+                db.delete(consent)
+            if student.face_profile:
+                db.delete(student.face_profile)
+            student.parent_id = request.parent_id
+        request.status = "approved"
+        action = "parent.child_link_request.approve"
+    else:
+        request.status = "rejected"
+        action = "parent.child_link_request.reject"
+    request.reviewed_by = actor.id
+    request.reviewed_at = utcnow()
+    audit(db, actor, action, "parent_link_request", request.id)
+    db.commit()
+    return {"id": request.id, "status": request.status}
 
 
 @router.post("/parents/children/{student_id}/consent")

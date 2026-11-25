@@ -34,6 +34,9 @@ export default function App() {
   const [classes, setClasses] = useState([]);
   const [students, setStudents] = useState([]);
   const [children, setChildren] = useState([]);
+  const [linkRequests, setLinkRequests] = useState([]);
+  const [studentNumber, setStudentNumber] = useState("");
+  const [showAddChild, setShowAddChild] = useState(false);
   const [history, setHistory] = useState([]);
   const [records, setRecords] = useState([]);
   const [selectedClass, setSelectedClass] = useState(null);
@@ -51,7 +54,11 @@ export default function App() {
     setSummary(stats); setClasses(classList);
     if (user.role === "teacher") setStudents(await request("/students"));
     if (user.role === "parent") {
-      setChildren(await request("/parents/children"));
+      const [linkedChildren, requests] = await Promise.all([
+        request("/parents/children"),
+        request("/parents/children/requests"),
+      ]);
+      setChildren(linkedChildren); setLinkRequests(requests);
       setHistory(await request("/attendance/history"));
     }
     if (user.role === "student") setHistory(await request("/attendance/history"));
@@ -120,6 +127,18 @@ export default function App() {
     try { await request(`/parents/children/${studentId}/consent`, { method: "POST", body: JSON.stringify({ consent }) }); setMessage(consent ? "Guardian consent recorded." : "Consent revoked; stored face profile deleted."); }
     catch (e) { setError(e.message); }
   }
+  async function submitChildRequest() {
+    setError(""); setMessage("");
+    try {
+      await request("/parents/children/requests", {
+        method: "POST",
+        body: JSON.stringify({ student_number: studentNumber.trim() }),
+      });
+      setStudentNumber(""); setShowAddChild(false);
+      setLinkRequests(await request("/parents/children/requests"));
+      setMessage("Child-link request sent to the school for review.");
+    } catch (e) { setError(e.message); }
+  }
   const displayName = user?.full_name || "";
 
   return <SafeAreaView style={styles.safe}>
@@ -156,7 +175,11 @@ export default function App() {
         <Text style={styles.disclaimer}>Automatic marking is disabled unless configured by the school. Review each match; face matching does not verify liveness.</Text>
       </>}
       {(user.role === "student" || user.role === "parent") && <>
-        {user.role === "parent" && <><Text style={styles.sectionTitle}>Linked children</Text>{children.length ? children.map(child => <View style={styles.listCard} key={child.id}><View><Text style={styles.cardTitle}>{child.full_name}</Text><Text style={styles.cardSub}>{child.student_number}</Text></View><View style={styles.consentButtons}><TouchableOpacity onPress={() => giveConsent(child.id, true)}><Text style={styles.link}>Consent</Text></TouchableOpacity><TouchableOpacity onPress={() => giveConsent(child.id, false)}><Text style={styles.revoke}>Revoke</Text></TouchableOpacity></View></View>) : <Text style={styles.helper}>No children linked. Ask the school administrator for help.</Text>}</>}
+        {user.role === "parent" && <><View style={styles.sectionHeader}><Text style={styles.sectionTitle}>Linked children</Text><TouchableOpacity onPress={() => setShowAddChild(value => !value)}><Text style={styles.link}>+ Add child</Text></TouchableOpacity></View>
+          {showAddChild && <View style={styles.card}><Text style={styles.label}>Child's student number</Text><TextInput style={styles.input} autoCapitalize="characters" value={studentNumber} onChangeText={setStudentNumber} placeholder="Enter student number" /><Button title="Send link request" onPress={submitChildRequest} disabled={!studentNumber.trim()} /><Text style={styles.disclaimer}>The school must verify and approve this request before child records are visible.</Text></View>}
+          {children.length ? children.map(child => <View style={styles.listCard} key={child.id}><View><Text style={styles.cardTitle}>{child.full_name}</Text><Text style={styles.cardSub}>{child.student_number}</Text></View><View style={styles.consentButtons}><TouchableOpacity onPress={() => giveConsent(child.id, true)}><Text style={styles.link}>Consent</Text></TouchableOpacity><TouchableOpacity onPress={() => giveConsent(child.id, false)}><Text style={styles.revoke}>Revoke</Text></TouchableOpacity></View></View>) : !linkRequests.length && <Text style={styles.helper}>No children linked yet. Submit a request using the child's student number.</Text>}
+          {linkRequests.map(item => <View style={styles.listCard} key={item.id}><View><Text style={styles.cardTitle}>Student {item.student_number}</Text><Text style={styles.cardSub}>Link request status</Text></View><Text style={[styles.status, item.status === "approved" ? styles.present : item.status === "rejected" ? styles.absent : styles.pending]}>{item.status}</Text></View>)}
+        </>}
         <Text style={styles.sectionTitle}>Attendance history</Text>
         {history.length ? history.map(record => <View style={styles.listCard} key={record.id}><View><Text style={styles.cardTitle}>{user.role === "parent" ? record.student_name : record.date}</Text><Text style={styles.cardSub}>{new Date(record.date).toLocaleDateString()} · {record.source}</Text></View><Text style={[styles.status, record.status === "present" ? styles.present : styles.absent]}>{record.status}</Text></View>) : <View style={styles.card}><Text style={styles.helper}>No attendance records yet.</Text></View>}
       </>}
@@ -192,6 +215,7 @@ const styles = StyleSheet.create({
   link: { color: "#376bdb", fontWeight: "700", fontSize: 12 },
   revoke: { color: "#b45650", fontWeight: "700", fontSize: 12 },
   sectionTitle: { color: "#20344c", fontSize: 17, fontWeight: "800", marginTop: 13, marginBottom: 1 },
+  sectionHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginTop: 13 },
   stats: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   stat: { width: "48%", minHeight: 84, backgroundColor: "#fff", borderWidth: 1, borderColor: "#e8edf4", borderRadius: 12, padding: 14 },
   statValue: { color: "#203a5c", fontSize: 22, fontWeight: "800" },
@@ -209,6 +233,7 @@ const styles = StyleSheet.create({
   status: { fontSize: 11, textTransform: "capitalize", fontWeight: "800" },
   present: { color: "#238161" },
   absent: { color: "#bd5b54" },
+  pending: { color: "#a77825" },
   helper: { color: "#8492a5", fontSize: 12, lineHeight: 18 },
   error: { color: "#b34842", fontSize: 12, marginBottom: 10 },
   errorBox: { padding: 12, backgroundColor: "#fff0ef", borderRadius: 9, color: "#a94640", fontSize: 12 },

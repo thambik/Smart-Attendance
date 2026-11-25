@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.main import app
-from app.models import AttendanceSession, Enrollment, FaceProfile, Parent, ParentConsent, SchoolClass, Student, Teacher, User
+from app.models import AttendanceSession, Enrollment, FaceProfile, Parent, ParentConsent, ParentLinkRequest, SchoolClass, Student, Teacher, User
 from app.routes.api import (
     attendance_report,
     create_class,
@@ -21,13 +21,16 @@ from app.routes.api import (
     login,
     manual_attendance,
     parent_consent,
+    request_child_link,
+    list_parent_link_requests,
+    review_parent_link_request,
     register,
     start_session,
     stop_session,
     update_class,
     update_student,
 )
-from app.schemas import ClassCreate, ClassUpdate, ConsentIn, LoginIn, ManualAttendanceIn, ParentCreate, SessionCreate, StudentCreate, StudentUpdate, TeacherCreate
+from app.schemas import ClassCreate, ClassUpdate, ConsentIn, LoginIn, ManualAttendanceIn, ParentCreate, ParentLinkRequestCreate, ParentLinkRequestReview, SessionCreate, StudentCreate, StudentUpdate, TeacherCreate
 from app.security import create_access_token, hash_password, require_roles, verify_password, current_user
 
 
@@ -164,6 +167,42 @@ def test_parent_consent_revocation_deletes_biometric_profile(db):
     assert db.scalar(select(FaceProfile).where(FaceProfile.student_id == student.id)) is None
 
 
+def test_parent_child_link_requires_admin_approval(db, admin_user):
+    parent_user = User(
+        email="requesting-parent@example.com", full_name="Requesting Parent",
+        password_hash="unused", role="parent",
+    )
+    child_user = User(
+        email="student-to-link@example.com", full_name="Student To Link",
+        password_hash="unused", role="student",
+    )
+    db.add_all([parent_user, child_user])
+    db.flush()
+    parent = Parent(user_id=parent_user.id)
+    student = Student(user_id=child_user.id, student_number="LINK-100")
+    db.add_all([parent, student])
+    db.commit()
+    db.refresh(parent)
+    db.refresh(student)
+
+    created = request_child_link(ParentLinkRequestCreate(student_number="LINK-100"), db, parent_user)
+    assert created["status"] == "pending"
+    assert student.parent_id is None
+    with pytest.raises(HTTPException) as duplicate:
+        request_child_link(ParentLinkRequestCreate(student_number="LINK-100"), db, parent_user)
+    assert duplicate.value.status_code == 409
+
+    requests = list_parent_link_requests(db, admin_user)
+    assert requests[0]["student_name"] == "Student To Link"
+    result = review_parent_link_request(
+        created["id"], ParentLinkRequestReview(approved=True), db, admin_user,
+    )
+    assert result["status"] == "approved"
+    db.refresh(student)
+    assert student.parent_id == parent.id
+    assert db.get(ParentLinkRequest, created["id"]).reviewed_by == admin_user.id
+
+
 def test_face_enrollment_rejects_missing_student_without_invoking_model(db, admin_user):
     coroutine = enroll_face(999, UploadFile(file=BytesIO(b"unused"), filename="face.jpg"), db, admin_user)
     with pytest.raises(HTTPException) as missing:
@@ -174,6 +213,8 @@ def test_face_enrollment_rejects_missing_student_without_invoking_model(db, admi
 def test_openapi_exposes_protected_api_routes():
     schema = app.openapi()
     assert "/api/v1/auth/register" in schema["paths"]
+    assert "/api/v1/parents/children/requests" in schema["paths"]
+    assert "/api/v1/admin/parent-link-requests/{request_id}/review" in schema["paths"]
     assert "/api/v1/attendance/sessions/{session_id}/recognize" in schema["paths"]
     assert "/api/v1/students/{student_id}/face-profile" in schema["paths"]
     assert "HTTPBearer" in schema["components"]["securitySchemes"]
