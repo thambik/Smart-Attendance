@@ -24,8 +24,12 @@ function Button({ title, onPress, secondary = false, disabled = false }) {
 
 export default function App() {
   const [user, setUser] = useState(null);
+  const [registering, setRegistering] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [summary, setSummary] = useState(null);
   const [classes, setClasses] = useState([]);
   const [students, setStudents] = useState([]);
@@ -58,6 +62,20 @@ export default function App() {
     setBusy(true); setError("");
     try {
       const result = await request("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
+      accessToken = result.access_token; setUser(result.user);
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+  async function signUp() {
+    if (password !== confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+    setBusy(true); setError("");
+    try {
+      const result = await request("/auth/register", {
+        method: "POST",
+        body: JSON.stringify({ email, password, full_name: fullName, phone: phone || null }),
+      });
       accessToken = result.access_token; setUser(result.user);
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   }
@@ -107,11 +125,15 @@ export default function App() {
   return <SafeAreaView style={styles.safe}>
     <StatusBar barStyle="dark-content" backgroundColor="#f4f7fc" />
     {!user ? <View style={styles.loginWrap}><View style={styles.loginCard}>
-      <View style={styles.logo}><Text style={styles.logoText}>S</Text></View><Text style={styles.brand}>SmartAttend AI</Text><Text style={styles.subtitle}>School attendance, made clear.</Text>
+      <View style={styles.logo}><Text style={styles.logoText}>S</Text></View><Text style={styles.brand}>{registering ? "Create your account" : "SmartAttend AI"}</Text><Text style={styles.subtitle}>{registering ? "Register as a parent or guardian." : "School attendance, made clear."}</Text>
+      {registering && <><Text style={styles.label}>Full name</Text><TextInput style={styles.input} autoCapitalize="words" value={fullName} onChangeText={setFullName} placeholder="Your full name" /></>}
       <Text style={styles.label}>Email</Text><TextInput style={styles.input} autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail} placeholder="you@school.edu" />
-      <Text style={styles.label}>Password</Text><TextInput style={styles.input} secureTextEntry value={password} onChangeText={setPassword} placeholder="Enter your password" />
-      {error ? <Text style={styles.error}>{error}</Text> : null}<Button title={busy ? "Signing in..." : "Sign in"} onPress={signIn} disabled={busy || !email || !password} />
-      <Text style={styles.disclaimer}>Face data is processed only with guardian consent.</Text>
+      {registering && <><Text style={styles.label}>Phone (optional)</Text><TextInput style={styles.input} keyboardType="phone-pad" value={phone} onChangeText={setPhone} placeholder="Phone number" /></>}
+      <Text style={styles.label}>Password {registering ? "(12+ characters)" : ""}</Text><TextInput style={styles.input} secureTextEntry value={password} onChangeText={setPassword} placeholder="Enter your password" />
+      {registering && <><Text style={styles.label}>Confirm password</Text><TextInput style={styles.input} secureTextEntry value={confirmPassword} onChangeText={setConfirmPassword} placeholder="Confirm your password" /></>}
+      {error ? <Text style={styles.error}>{error}</Text> : null}<Button title={busy ? "Please wait..." : registering ? "Create parent account" : "Sign in"} onPress={registering ? signUp : signIn} disabled={busy || !email || !password || (registering && (!fullName || password.length < 12 || !confirmPassword))} />
+      <View style={styles.authSwitch}><Text style={styles.disclaimer}>{registering ? "Already have an account?" : "Don't have an account?"}</Text><TouchableOpacity onPress={() => { setRegistering(value => !value); setError(""); }}><Text style={styles.link}>{registering ? "Sign in" : "Create account"}</Text></TouchableOpacity></View>
+      <Text style={styles.disclaimer}>{registering ? "Student and teacher accounts are created by school administrators." : "Face data is processed only with guardian consent."}</Text>
     </View></View> : <ScrollView contentContainerStyle={styles.page}>
       <View style={styles.header}><View><Text style={styles.kicker}>{user.role.toUpperCase()} WORKSPACE</Text><Text style={styles.heading}>Hello, {displayName.split(" ")[0]}</Text></View><TouchableOpacity onPress={signOut}><Text style={styles.link}>Sign out</Text></TouchableOpacity></View>
       {error ? <Text style={styles.errorBox}>{error}</Text> : null}
@@ -163,6 +185,7 @@ const styles = StyleSheet.create({
   secondaryText: { color: "#52647b" },
   disabled: { opacity: 0.5 },
   disclaimer: { color: "#8a98ab", fontSize: 11, lineHeight: 17, marginTop: 14 },
+  authSwitch: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, marginTop: 12 },
   header: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 5 },
   kicker: { color: "#7590c7", fontSize: 10, fontWeight: "800", letterSpacing: 1.2 },
   heading: { color: "#17283e", fontSize: 24, fontWeight: "800", marginTop: 5 },

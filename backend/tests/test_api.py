@@ -21,6 +21,7 @@ from app.routes.api import (
     login,
     manual_attendance,
     parent_consent,
+    register,
     start_session,
     stop_session,
     update_class,
@@ -43,6 +44,26 @@ def test_login_token_and_role_authorization(db, admin_user):
     with pytest.raises(HTTPException) as denied:
         require_roles("admin")(user=teacher)
     assert denied.value.status_code == 403
+
+
+def test_parent_can_register_and_student_role_cannot_be_chosen(db):
+    registration = ParentCreate.model_validate({
+        "email": "new-parent@example.com",
+        "full_name": "New Guardian",
+        "password": "a-very-long-password",
+        "phone": "555-0100",
+        "role": "admin",
+    })
+    response = register(registration, db)
+    assert response["user"].role == "parent"
+    assert response["user"].email == registration.email
+    parent = db.scalar(select(Parent).where(Parent.user_id == response["user"].id))
+    assert parent is not None
+    assert parent.phone == registration.phone
+    assert response["user"].role != "admin"
+    with pytest.raises(HTTPException) as duplicate:
+        register(registration, db)
+    assert duplicate.value.status_code == 409
 
 
 def test_student_teacher_and_class_operations(db, admin_user):
@@ -152,6 +173,7 @@ def test_face_enrollment_rejects_missing_student_without_invoking_model(db, admi
 
 def test_openapi_exposes_protected_api_routes():
     schema = app.openapi()
+    assert "/api/v1/auth/register" in schema["paths"]
     assert "/api/v1/attendance/sessions/{session_id}/recognize" in schema["paths"]
     assert "/api/v1/students/{student_id}/face-profile" in schema["paths"]
     assert "HTTPBearer" in schema["components"]["securitySchemes"]

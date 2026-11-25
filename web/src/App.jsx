@@ -4,25 +4,43 @@ import { api, downloadReport } from "./services/api";
 
 const initialForm = { email: "", full_name: "", password: "", student_number: "", class_id: "", parent_id: "", employee_code: "", name: "", section: "", teacher_id: "" };
 
-function Login({ onLogin }) {
+function Login({ onLogin, onRegister }) {
+  const [registering, setRegistering] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   async function submit(event) {
     event.preventDefault(); setBusy(true); setError("");
-    try { await onLogin(email, password); } catch (e) { setError(e.message); } finally { setBusy(false); }
+    try {
+      if (registering) {
+        if (password !== confirmPassword) throw new Error("Passwords do not match.");
+        await onRegister({ email, password, full_name: fullName, phone: phone || null });
+      } else {
+        await onLogin(email, password);
+      }
+    } catch (e) { setError(e.message); } finally { setBusy(false); }
   }
   return <main className="login-shell"><section className="login-card">
     <div className="brand-mark"><GraduationCap size={24} /></div><p className="eyebrow">SMARTATTEND AI</p>
-    <h1>Welcome back</h1><p className="muted">Sign in to your school workspace.</p>
+    <h1>{registering ? "Create your account" : "Welcome back"}</h1><p className="muted">{registering ? "Register as a parent or guardian." : "Sign in to your school workspace."}</p>
     <form onSubmit={submit} className="stack">
+      {registering && <label>Full name<input autoComplete="name" required value={fullName} onChange={e => setFullName(e.target.value)} /></label>}
       <label>Email address<input autoComplete="username" type="email" required value={email} onChange={e => setEmail(e.target.value)} /></label>
-      <label>Password<input autoComplete="current-password" type="password" required value={password} onChange={e => setPassword(e.target.value)} /></label>
+      {registering && <label>Phone (optional)<input autoComplete="tel" type="tel" value={phone} onChange={e => setPhone(e.target.value)} /></label>}
+      <label>Password<input autoComplete={registering ? "new-password" : "current-password"} minLength={registering ? 12 : undefined} type="password" required value={password} onChange={e => setPassword(e.target.value)} /></label>
+      {registering && <label>Confirm password<input autoComplete="new-password" minLength="12" type="password" required value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} /></label>}
       {error && <p className="error">{error}</p>}
-      <button className="primary full" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
+      <button className="primary full" disabled={busy}>{busy ? "Please wait…" : registering ? "Create parent account" : "Sign in"}</button>
     </form>
-    <p className="privacy-note"><ShieldCheck size={15} /> Biometric processing requires guardian consent.</p>
+    <div className="auth-switch">
+      <span>{registering ? "Already have an account?" : "Don't have an account?"}</span>
+      <button type="button" className="text-button" onClick={() => { setRegistering(value => !value); setError(""); }}>{registering ? "Sign in" : "Create a parent account"}</button>
+    </div>
+    <p className="privacy-note"><ShieldCheck size={15} /> {registering ? "Student and teacher accounts are created by school administrators." : "Biometric processing requires guardian consent."}</p>
   </section></main>;
 }
 
@@ -71,6 +89,10 @@ function App() {
 
   async function login(email, password) {
     const result = await api("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
+    localStorage.setItem("smartattend_token", result.access_token); setUser(result.user);
+  }
+  async function registerParent(payload) {
+    const result = await api("/auth/register", { method: "POST", body: JSON.stringify(payload) });
     localStorage.setItem("smartattend_token", result.access_token); setUser(result.user);
   }
   async function logout() {
@@ -144,7 +166,7 @@ function App() {
     try { await api(`/parents/children/${studentId}/consent`, { method: "POST", body: JSON.stringify({ consent }) }); setNotice(consent ? "Consent recorded." : "Consent revoked and face profile removed."); }
     catch (e) { setError(e.message); }
   }
-  if (!user) return <Login onLogin={login} />;
+  if (!user) return <Login onLogin={login} onRegister={registerParent} />;
 
   const roleTitle = { admin: "Administrator", teacher: "Teacher", student: "Student", parent: "Parent" }[user.role];
   return <div className="app-shell">

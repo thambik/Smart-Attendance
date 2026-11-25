@@ -52,6 +52,8 @@ uvicorn app.main:app --reload
 
 Open `http://localhost:8000/docs` for the interactive API docs. To use SQLite locally, set `DATABASE_URL=sqlite:///./smartattend.db`; PostgreSQL is recommended for deployments.
 
+Parents and guardians can create their own accounts from the web or mobile sign-in screen. New accounts are parent-only and must be linked to a child by an administrator. Student and teacher accounts are provisioned by school administrators.
+
 ### Face model setup
 
 Recognition is lazy-loaded on the first enrollment or recognition request. Configure `INSIGHTFACE_MODEL` (default `buffalo_l`) and `INSIGHTFACE_ROOT`; install the optional runtime with `python -m pip install -r requirements-ai.txt`. On Windows, InsightFace builds native extensions from source and may require Microsoft C++ Build Tools 14.0+; using Python 3.12 in a supported Linux/WSL environment can simplify setup. If the model or runtime is not installed/available, endpoints return an explicit setup error; attendance is not fabricated. Model weights are not committed. Provision weights only from a trusted source and follow their license.

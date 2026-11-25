@@ -53,6 +53,30 @@ def login(payload: LoginIn, db: Session = Depends(get_db)):
     return {"access_token": create_access_token(user), "token_type": "bearer", "user": UserOut.model_validate(user)}
 
 
+@router.post("/auth/register", status_code=201)
+def register(payload: ParentCreate, db: Session = Depends(get_db)):
+    if db.scalar(select(User.id).where(func.lower(User.email) == payload.email.lower())):
+        raise HTTPException(status_code=409, detail="Email is already registered")
+    account = User(
+        email=payload.email.lower(),
+        full_name=payload.full_name,
+        password_hash=hash_password(payload.password),
+        role="parent",
+    )
+    db.add(account)
+    db.flush()
+    parent = Parent(user_id=account.id, phone=payload.phone)
+    db.add(parent)
+    db.flush()
+    audit(db, account, "parent.self_register", "parent", parent.id)
+    db.commit()
+    return {
+        "access_token": create_access_token(account),
+        "token_type": "bearer",
+        "user": UserOut.model_validate(account),
+    }
+
+
 @router.post("/auth/logout")
 def logout(_: User = Depends(current_user)):
     return {"message": "Logged out. Discard the access token on this device."}
