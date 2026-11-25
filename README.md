@@ -37,7 +37,7 @@ Set `DATABASE_URL` to a PostgreSQL URL and set strong, unique `JWT_SECRET_KEY` a
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-Create the first administrator only after configuring a private one-time `BOOTSTRAP_TOKEN`:
+Create the first administrator after configuring a private one-time `BOOTSTRAP_TOKEN`. This works even if parent accounts have already registered; it is disabled once an administrator exists:
 
 ```powershell
 alembic upgrade head

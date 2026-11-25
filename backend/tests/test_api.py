@@ -7,6 +7,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import select
 
 from app.config import settings
+from app.create_admin import ensure_admin_bootstrap_available
 from app.main import app
 from app.models import AttendanceSession, Enrollment, FaceProfile, Parent, ParentConsent, ParentLinkRequest, SchoolClass, Student, Teacher, User
 from app.routes.api import (
@@ -67,6 +68,21 @@ def test_parent_can_register_and_student_role_cannot_be_chosen(db):
     with pytest.raises(HTTPException) as duplicate:
         register(registration, db)
     assert duplicate.value.status_code == 409
+
+
+def test_admin_bootstrap_remains_available_after_parent_registration(db):
+    parent = User(
+        email="bootstrap-parent@example.com", full_name="Parent", password_hash="unused", role="parent",
+    )
+    db.add(parent)
+    db.commit()
+
+    ensure_admin_bootstrap_available(db)
+
+    db.add(User(email="existing-admin@example.com", full_name="Admin", password_hash="unused", role="admin"))
+    db.commit()
+    with pytest.raises(SystemExit, match="no administrator exists"):
+        ensure_admin_bootstrap_available(db)
 
 
 def test_student_teacher_and_class_operations(db, admin_user):
